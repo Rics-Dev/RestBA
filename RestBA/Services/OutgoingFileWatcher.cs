@@ -1,7 +1,8 @@
-using System.Threading.Channels;
-using System.Xml;
 using Microsoft.Extensions.Options;
 using RestBA.Options;
+using System.Security.Cryptography.Xml;
+using System.Threading.Channels;
+using System.Xml;
 
 namespace RestBA.Services;
 
@@ -69,23 +70,38 @@ public class OutgoingFileWatcher : BackgroundService
             var messageType = msgDefIdrNode?.InnerText ?? "unknown";
 
             var signedContent = _signatureService.SignMXDocument(content);
-            var success = await _messageService.SendMessage(traceReference, messageType, signedContent);
+            bool isValid = _signatureService.VerifySignature(signedContent);
+            Console.WriteLine($"Signature is valid: {isValid}");
+            // ────────────────────────────────────────────────
+            // For TESTING: instead of sending → save to OutgoingFiles
+            // You can later switch this block back to SendMessage
+            // ────────────────────────────────────────────────
 
-            if (success)
-            {
-                var processedPath = Path.Combine(
-                    _dirOptions.ProcessedFiles,
-                    $"{Path.GetFileNameWithoutExtension(filePath)}_{DateTime.Now:yyyyMMddHHmmss}.xml"
-                );
-                Directory.CreateDirectory(_dirOptions.ProcessedFiles);
-                File.Move(filePath, processedPath, true);
+            var outputFileName = $"{Path.GetFileNameWithoutExtension(filePath)}_{DateTime.Now:yyyyMMddHHmmss}_SIGNED.xml";
+            var outputPath = Path.Combine(_dirOptions.ProcessedFiles, outputFileName);
 
-                _logger.LogInformation("File processed and moved: {ProcessedPath}", processedPath);
-            }
-            else
-            {
-                MoveToErrorDirectory(filePath, "ERROR");
-            }
+            Directory.CreateDirectory(_dirOptions.ProcessedFiles);
+
+            await File.WriteAllTextAsync(outputPath, signedContent, stoppingToken);
+
+
+            //var success = await _messageService.SendMessage(traceReference, messageType, signedContent);
+
+            //if (success)
+            //{
+            //    var processedPath = Path.Combine(
+            //        _dirOptions.ProcessedFiles,
+            //        $"{Path.GetFileNameWithoutExtension(filePath)}_{DateTime.Now:yyyyMMddHHmmss}.xml"
+            //    );
+            //    Directory.CreateDirectory(_dirOptions.ProcessedFiles);
+            //    File.Move(filePath, processedPath, true);
+
+            //    _logger.LogInformation("File processed and moved: {ProcessedPath}", processedPath);
+            //}
+            //else
+            //{
+            //    MoveToErrorDirectory(filePath, "ERROR");
+            //}
         }
         catch (Exception ex)
         {

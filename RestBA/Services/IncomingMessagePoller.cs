@@ -32,25 +32,25 @@ public class IncomingMessagePoller : BackgroundService
 
         _logger.LogInformation("Incoming message poller started");
 
-        while (!stoppingToken.IsCancellationRequested)
-        {
-            try
-            {
-                var messages = await _messageService.ReceiveMessages();
+        //while (!stoppingToken.IsCancellationRequested)
+        //{
+        //    try
+        //    {
+        //        var messages = await _messageService.ReceiveMessages();
 
-                foreach (var message in messages)
-                {
-                    await ProcessIncomingMessage(message);
-                }
+        //        foreach (var message in messages)
+        //        {
+        //            await ProcessIncomingMessage(message);
+        //        }
 
-                await Task.Delay(_pollingOptions.PollingIntervalMs, stoppingToken);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error in message polling loop");
-                await Task.Delay(5000, stoppingToken);
-            }
-        }
+        //        await Task.Delay(_pollingOptions.PollingIntervalMs, stoppingToken);
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        _logger.LogError(ex, "Error in message polling loop");
+        //        await Task.Delay(5000, stoppingToken);
+        //    }
+        //}
     }
 
     private async Task ProcessIncomingMessage(MXMessage message)
