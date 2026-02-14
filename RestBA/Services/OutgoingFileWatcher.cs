@@ -56,7 +56,7 @@ public class OutgoingFileWatcher : BackgroundService
 
             _logger.LogInformation("Processing file: {FilePath}", filePath);
 
-            var xmlDoc = new XmlDocument();
+            var xmlDoc = new XmlDocument { PreserveWhitespace = true };
             xmlDoc.LoadXml(content);
 
             var nsManager = new XmlNamespaceManager(xmlDoc.NameTable);

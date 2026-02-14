@@ -57,7 +57,6 @@ public class SignatureService
 
         try
         {
-            // Use PreserveWhitespace = true for consistent canonicalization
             var xmlDoc = new XmlDocument { PreserveWhitespace = true };
             xmlDoc.LoadXml(documentContent);
 
@@ -71,40 +70,44 @@ public class SignatureService
             var keyInfoId = "_" + Guid.NewGuid().ToString();
             var signedPropsId = "_" + Guid.NewGuid().ToString() + "-signedprops";
 
-            // 1. Canonicaliser l'élément Document (référence sans URI)
-            var documentCanonical = CanonicalizeElement(documentElement);
-            var documentDigest = ComputeSha256Digest(documentCanonical);
+            // 1. Compute Document digest (no-URI reference)
+            var documentDigest = ComputeElementDigest(documentElement);
 
-            // 2. Construire le KeyInfo avec X509IssuerSerial uniquement
+            // 2. Build and digest KeyInfo
             var keyInfoElement = BuildKeyInfoElement(xmlDoc, keyInfoId);
-            var keyInfoCanonical = CanonicalizeElement(keyInfoElement);
-            var keyInfoDigest = ComputeSha256Digest(keyInfoCanonical);
+            var keyInfoDigest = ComputeElementDigest(keyInfoElement);
 
-            // 3. Construire l'élément SignedProperties XAdES avec SigningTime
+            // 3. Build and digest SignedProperties
             var signedPropsElement = BuildSignedPropertiesElement(xmlDoc, signedPropsId);
-            var signedPropsCanonical = CanonicalizeElement(signedPropsElement);
-            var signedPropsDigest = ComputeSha256Digest(signedPropsCanonical);
+            var signedPropsDigest = ComputeElementDigest(signedPropsElement);
 
-            // 4. Construire le SignedInfo avec les 3 références
+            // 4. Build SignedInfo with all 3 references
             var signedInfoElement = BuildSignedInfoElement(
                 xmlDoc, keyInfoId, keyInfoDigest, signedPropsId, signedPropsDigest, documentDigest);
 
-            // 5. Canonicaliser SignedInfo et calculer la signature
-            var signedInfoCanonical = CanonicalizeElement(signedInfoElement);
-            var signatureValue = ComputeRsaSha256Signature(signedInfoCanonical);
-
-            // 6. Assembler la signature complète
+            // 5. Assemble the full Signature element FIRST (before canonicalizing SignedInfo)
+            // This mirrors the Java XMLSignatureFactory behavior where SignedInfo is
+            // canonicalized after being placed in its final document context.
             var signatureElement = BuildSignatureElement(
-                xmlDoc, signatureId, signedInfoElement, signatureValue,
+                xmlDoc, signatureId, signedInfoElement, signatureValue: null,
                 keyInfoElement, signedPropsElement, signedPropsId, signatureId);
 
-            // 7. Insérer dans AppHdr/Sgntr
+            // 6. Insert into AppHdr/Sgntr so SignedInfo is in its final tree context
             var sgntrElement = xmlDoc.CreateElement("Sgntr", appHdrElement.NamespaceURI);
             sgntrElement.AppendChild(signatureElement);
             appHdrElement.AppendChild(sgntrElement);
 
-            // Return the XML directly — do NOT reformat/minify, as that
-            // would alter whitespace and invalidate the signature.
+            // 7. NOW canonicalize SignedInfo from the final DOM and compute signature
+            var signedInfoInDom = signatureElement.SelectSingleNode("*[local-name()='SignedInfo']") as XmlElement
+                ?? throw new InvalidOperationException("SignedInfo element not found after assembly");
+            var signedInfoCanonical = CanonicalizeElementToBytes(signedInfoInDom);
+            var sigValue = ComputeRsaSha256Signature(signedInfoCanonical);
+
+            // 8. Set the SignatureValue
+            var sigValueElem = signatureElement.SelectSingleNode("*[local-name()='SignatureValue']") as XmlElement
+                ?? throw new InvalidOperationException("SignatureValue element not found");
+            sigValueElem.InnerText = sigValue;
+
             return xmlDoc.OuterXml;
         }
         catch (Exception ex)
@@ -163,25 +166,23 @@ public class SignatureService
     {
         var signedInfo = xmlDoc.CreateElement("ds", "SignedInfo", DsNs);
 
-        // CanonicalizationMethod
         var c14nMethod = xmlDoc.CreateElement("ds", "CanonicalizationMethod", DsNs);
         c14nMethod.SetAttribute("Algorithm", ExcC14NAlgorithm);
         signedInfo.AppendChild(c14nMethod);
 
-        // SignatureMethod
         var sigMethod = xmlDoc.CreateElement("ds", "SignatureMethod", DsNs);
         sigMethod.SetAttribute("Algorithm", RsaSha256Algorithm);
         signedInfo.AppendChild(sigMethod);
 
-        // Référence 1 : KeyInfo
+        // Reference 1: KeyInfo
         signedInfo.AppendChild(BuildReferenceElement(
             xmlDoc, "#" + keyInfoId, null, keyInfoDigest));
 
-        // Référence 2 : SignedProperties
+        // Reference 2: SignedProperties
         signedInfo.AppendChild(BuildReferenceElement(
             xmlDoc, "#" + signedPropsId, "http://uri.etsi.org/01903/v1.3.2#SignedProperties", signedPropsDigest));
 
-        // Référence 3 : Document (sans URI)
+        // Reference 3: Document (no URI)
         signedInfo.AppendChild(BuildReferenceElement(
             xmlDoc, null, null, documentDigest));
 
@@ -216,7 +217,7 @@ public class SignatureService
 
     private XmlElement BuildSignatureElement(
         XmlDocument xmlDoc, string signatureId,
-        XmlElement signedInfoElement, string signatureValue,
+        XmlElement signedInfoElement, string? signatureValue,
         XmlElement keyInfoElement, XmlElement signedPropsElement,
         string signedPropsId, string sigId)
     {
@@ -225,19 +226,17 @@ public class SignatureService
 
         signature.AppendChild(signedInfoElement);
 
+        // Placeholder for SignatureValue — filled in after signing
         var sigValueElem = xmlDoc.CreateElement("ds", "SignatureValue", DsNs);
-        sigValueElem.InnerText = signatureValue;
+        sigValueElem.InnerText = signatureValue ?? string.Empty;
         signature.AppendChild(sigValueElem);
 
         signature.AppendChild(keyInfoElement);
 
-        // ds:Object contenant QualifyingProperties
         var objectElem = xmlDoc.CreateElement("ds", "Object", DsNs);
-
         var qualifyingProps = xmlDoc.CreateElement("xades", "QualifyingProperties", XadesNs);
         qualifyingProps.SetAttribute("Target", "#" + sigId);
         qualifyingProps.AppendChild(signedPropsElement);
-
         objectElem.AppendChild(qualifyingProps);
         signature.AppendChild(objectElem);
 
@@ -255,22 +254,15 @@ public class SignatureService
         return stream.ToArray();
     }
 
-    private static string CanonicalizeElement(XmlElement element)
+    private static string ComputeElementDigest(XmlElement element)
     {
-        var bytes = CanonicalizeElementToBytes(element);
-        return System.Text.Encoding.UTF8.GetString(bytes);
-    }
-
-    private static string ComputeSha256Digest(string canonicalXml)
-    {
-        var bytes = System.Text.Encoding.UTF8.GetBytes(canonicalXml);
-        var hash = SHA256.HashData(bytes);
+        var canonicalBytes = CanonicalizeElementToBytes(element);
+        var hash = SHA256.HashData(canonicalBytes);
         return Convert.ToBase64String(hash);
     }
 
-    private string ComputeRsaSha256Signature(string canonicalSignedInfo)
+    private string ComputeRsaSha256Signature(byte[] data)
     {
-        var data = System.Text.Encoding.UTF8.GetBytes(canonicalSignedInfo);
         using var rsa = _certificate!.GetRSAPrivateKey()
             ?? throw new InvalidOperationException("RSA private key not available");
         var signature = rsa.SignData(data, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
@@ -302,7 +294,6 @@ public class SignatureService
                 return false;
             }
 
-            // Vérifier la présence de SignedProperties (XAdES)
             var nsMgr = new XmlNamespaceManager(xmlDoc.NameTable);
             nsMgr.AddNamespace("xades", XadesNs);
             var signedPropsNode = signatureElement.SelectSingleNode(".//xades:SignedProperties", nsMgr);
@@ -312,9 +303,6 @@ public class SignatureService
                 return false;
             }
 
-            // Manually verify each reference and the signature value,
-            // because SignedXml.CheckSignature cannot resolve the no-URI Reference
-            // that points to the <Document> element.
             var signedXml = new XadesSignedXml(xmlDoc);
             signedXml.LoadXml(signatureElement);
 
@@ -323,7 +311,7 @@ public class SignatureService
             {
                 if (string.IsNullOrEmpty(reference.Uri))
                 {
-                    // No-URI reference → resolve to the <Document> element
+                    // No-URI reference → resolve to the <Document> element (like Java NoUriDereferencer)
                     var documentElement = xmlDoc.SelectSingleNode("//*[local-name()='Document']") as XmlElement;
                     if (documentElement == null)
                     {
@@ -333,10 +321,7 @@ public class SignatureService
 
                     var canonicalBytes = CanonicalizeElementToBytes(documentElement);
                     var computedHash = SHA256.HashData(canonicalBytes);
-                    var expectedHash = Convert.FromBase64String(reference.DigestValue is not null
-                        ? Convert.ToBase64String(reference.DigestValue) : "");
 
-                    // DigestValue is already a byte[], compare directly
                     if (!CryptographicOperations.FixedTimeEquals(computedHash, reference.DigestValue))
                     {
                         _logger.LogWarning("Document reference digest mismatch");
@@ -364,7 +349,7 @@ public class SignatureService
                 }
             }
 
-            // 2. Verify the SignatureValue over the canonicalized SignedInfo
+            // 2. Verify SignatureValue over canonicalized SignedInfo
             var signedInfoElement = signatureElement.SelectSingleNode("*[local-name()='SignedInfo']") as XmlElement;
             if (signedInfoElement == null)
             {
@@ -373,7 +358,6 @@ public class SignatureService
             }
 
             var signedInfoCanonical = CanonicalizeElementToBytes(signedInfoElement);
-            var signatureValueText = signedXml.SignatureValue;
 
             using var rsa = certificate.GetRSAPublicKey();
             if (rsa == null)
@@ -382,7 +366,7 @@ public class SignatureService
                 return false;
             }
 
-            var isValid = rsa.VerifyData(signedInfoCanonical, signatureValueText,
+            var isValid = rsa.VerifyData(signedInfoCanonical, signedXml.SignatureValue,
                 HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
 
             _logger.LogInformation("Signature verification: {IsValid}", isValid);
@@ -396,8 +380,8 @@ public class SignatureService
     }
 
     /// <summary>
-    /// Sous-classe de SignedXml qui résout les éléments par attribut Id
-    /// pour supporter les références XAdES (SignedProperties, KeyInfo).
+    /// Subclass of SignedXml that resolves elements by Id attribute
+    /// to support XAdES references (SignedProperties, KeyInfo).
     /// </summary>
     private sealed class XadesSignedXml(XmlDocument document) : SignedXml(document)
     {
@@ -431,22 +415,4 @@ public class SignatureService
             return null;
         }
     }
-
-    private string MinifyXml(string xml)
-    {
-        var xmlDoc = new XmlDocument();
-        xmlDoc.LoadXml(xml);
-
-        using var stringWriter = new StringWriter();
-        using var xmlWriter = XmlWriter.Create(stringWriter, new XmlWriterSettings
-        {
-            Indent = true,
-            OmitXmlDeclaration = false,
-            NewLineHandling = NewLineHandling.Entitize
-        });
-
-        xmlDoc.Save(xmlWriter);
-        return stringWriter.ToString();
-    }
-
 }
