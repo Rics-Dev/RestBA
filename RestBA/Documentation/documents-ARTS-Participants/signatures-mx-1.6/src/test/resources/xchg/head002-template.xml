@@ -1,0 +1,15 @@
+<Xchg xmlns="urn:iso:std:iso:20022:tech:xsd:head.002.001.01">
+    <PyldDesc>
+        <PyldData>
+            <PyldIdr>987089-47rifjo0u889</PyldIdr>
+            <CreDtAndTm>2019-09-29T13:02:02+04:00</CreDtAndTm>
+        </PyldData>
+        <PyldTp>SPLIT</PyldTp>
+        <MnfstData>
+            <DocTp>pacs.009.001.08</DocTp>
+            <NbOfDocs>2</NbOfDocs>
+        </MnfstData>
+    </PyldDesc>
+    <Pyld/>
+    <Pyld/>
+</Xchg>

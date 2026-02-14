@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="RestBA.Tests/RestBA.Tests.csproj" />
+  <Project Path="RestBA/RestBA.csproj" />
+</Solution>

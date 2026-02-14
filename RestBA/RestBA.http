@@ -1,0 +1,6 @@
+@RestBA_HostAddress = http://localhost:5140
+
+GET {{RestBA_HostAddress}}/health
+Accept: application/json
+
+###
