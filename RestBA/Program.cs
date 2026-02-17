@@ -4,21 +4,13 @@ using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using RestBA.Authentication;
 using RestBA.HealthChecks;
+using RestBA.Logging;
 using RestBA.Options;
 using RestBA.Services;
-using Serilog;
 
-Log.Logger = new LoggerConfiguration()
-    .WriteTo.Console()
-    .CreateBootstrapLogger();
+var builder = WebApplication.CreateBuilder(args);
 
-try
-{
-    var builder = WebApplication.CreateBuilder(args);
-
-    builder.Host.UseSerilog((context, services, configuration) => configuration
-        .ReadFrom.Configuration(context.Configuration)
-        .ReadFrom.Services(services));
+builder.Logging.AddFile(builder.Configuration);
 
     builder.Services.AddControllers();
     builder.Services.AddOpenApi();
@@ -80,7 +72,6 @@ try
         });
     });
 
-    app.UseSerilogRequestLogging();
     app.UseHttpsRedirection();
     app.UseAuthentication();
     app.UseAuthorization();
@@ -107,12 +98,3 @@ try
     });
 
     app.Run();
-}
-catch (Exception ex)
-{
-    Log.Fatal(ex, "Application terminated unexpectedly");
-}
-finally
-{
-    Log.CloseAndFlush();
-}
